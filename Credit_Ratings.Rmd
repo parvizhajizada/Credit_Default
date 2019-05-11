@@ -1,0 +1,411 @@
+---
+title: "Credit Risk - methods of scorecards development in R"
+author: "Parviz Hajizada"
+date: "11 may 2019"
+output: html_document
+---
+
+# Introduction
+The dataset used in this project can be downloaded from Kaggle. Please refer to the [link](https://www.kaggle.com/c/home-credit-default-risk/data) to download. There are a number of files to download but only app_train.csv file will be used in this project. For further information regarding the descriptions of columns of the dataset please refer to the file called HomeCredit_columns_description.csv. 
+
+### Metric
+ROC is used as a metric to judge the quality of models.
+
+#### Load necessary packages
+```{r warning = FALSE, message = FALSE}
+library(readr)
+library(ggplot2)
+library(dplyr)
+library(fastDummies)
+library(corrplot)
+library(gridExtra)
+library(GGally)
+library(imputeMissings)
+library(caret)
+library(tibble)
+library(corrplot)
+library(AER)
+library(lmtest)
+library(nnet)
+library(MASS)
+library(verification)
+library(janitor)
+library(class)
+library(kernlab)
+library(verification)
+library(tidyverse)
+library(gmodels)
+library(vcd)
+library(RColorBrewer)
+
+```
+
+#### Import data
+```{r}
+app <- read.csv("application.csv")
+dim(app)
+```
+
+#### Data partitioning
+```{r}
+set.seed(1)
+which_train <- createDataPartition(app$TARGET, 
+                                   p = 0.8, 
+                                   list = FALSE) 
+
+# Split data into training and test test 
+train <- app[which_train,]
+test <- app[-which_train,]
+```
+
+
+
+# Exploratory data analysis
+#### Distribution of the dependent variable
+The target is what we are asked to predict: either a 0 for the loan was repaid on time, or a 1 indicating the client had payment difficulties. We can first examine the number of loans falling into each category.
+
+```{r message = FALSE, warning = FALSE}
+tabyl(train$TARGET) 
+tabyl(test$TARGET) 
+
+ggplot(app, aes(x = TARGET)) +
+  geom_histogram()
+```
+
+#### Missing values
+Next we can look at the number and percentage of missing values in each column.
+```{r message = FALSE, warning = FALSE}
+data.frame(colSums(is.na(train)), colMeans(is.na(train))) %>% 
+  filter(colSums.is.na.train.. != 0)
+```
+
+#### Factorize categorical variables
+Categorical variables are recorded as numeric or integer values in the dataset. These variables need to be converted to factors in order to be used during modelling.
+```{r}
+# List of variables to factorize
+facts <- c('SK_ID_CURR', 'CNT_CHILDREN', 'FLAG_MOBIL', 'FLAG_EMP_PHONE',
+            'FLAG_WORK_PHONE', 'FLAG_CONT_MOBILE', 'FLAG_PHONE', 'FLAG_EMAIL',
+            'CNT_FAM_MEMBERS', 'REGION_RATING_CLIENT', 'REGION_RATING_CLIENT_W_CITY',
+            'HOUR_APPR_PROCESS_START', 'REG_REGION_NOT_LIVE_REGION', 'REG_REGION_NOT_WORK_REGION',
+            'LIVE_REGION_NOT_WORK_REGION', 'REG_CITY_NOT_LIVE_CITY', 'REG_CITY_NOT_WORK_CITY',
+            'LIVE_CITY_NOT_WORK_CITY', 'OBS_30_CNT_SOCIAL_CIRCLE', 'DEF_30_CNT_SOCIAL_CIRCLE',
+            'OBS_60_CNT_SOCIAL_CIRCLE', 'DEF_60_CNT_SOCIAL_CIRCLE', 'FLAG_DOCUMENT_2',
+            'FLAG_DOCUMENT_3','FLAG_DOCUMENT_4','FLAG_DOCUMENT_5','FLAG_DOCUMENT_6','FLAG_DOCUMENT_7',
+            'FLAG_DOCUMENT_8','FLAG_DOCUMENT_9','FLAG_DOCUMENT_10','FLAG_DOCUMENT_11','FLAG_DOCUMENT_12',
+            'FLAG_DOCUMENT_13','FLAG_DOCUMENT_14','FLAG_DOCUMENT_15','FLAG_DOCUMENT_16','FLAG_DOCUMENT_17',
+            'FLAG_DOCUMENT_18','FLAG_DOCUMENT_19','FLAG_DOCUMENT_20','FLAG_DOCUMENT_21',
+            'AMT_REQ_CREDIT_BUREAU_HOUR', 'AMT_REQ_CREDIT_BUREAU_DAY', 'AMT_REQ_CREDIT_BUREAU_WEEK',
+            'AMT_REQ_CREDIT_BUREAU_MON', 'AMT_REQ_CREDIT_BUREAU_QRT', 'AMT_REQ_CREDIT_BUREAU_YEAR')
+
+# Factorize the categorical variables in both train and test set
+train[facts] <- lapply(train[facts], factor)
+test[facts] <- lapply(test[facts], factor)
+```
+
+#### Anomalies
+Summary statistics of columns can be used to detect anomalies. For example, the numbers in the DAYS_BIRTH column are negative because they are recorded relative to the current loan application. To see these stats in years, we can mutliple by -1 and divide by the number of days in a year:
+
+```{r}
+summary(train['DAYS_BIRTH'] / -365)
+```
+
+Ages look pretty reasonable.
+
+```{r}
+summary(train['DAYS_EMPLOYED'])
+```
+
+This one does not look right. According to the summary, maximum employment is equal to 365243 which is around a 1000 years. 
+
+Let's plot a histogram of the DAYS_EMPLOYED column and see what the distribution looks like.
+
+```{r message = FALSE, warning = FALSE}
+ggplot(train, aes(x = DAYS_EMPLOYED)) +
+  geom_histogram() +
+  ggtitle("Days Employment Histogram") +
+  xlab("Days Employment")
+```
+
+It looks like that 365243 is the only explicit anomaly. For now, let's just replace this value with NaN. Later on, during the modelling I will impute NA and NaN with median.
+
+```{r} 
+train$DAYS_EMPLOYED[train$DAYS_EMPLOYED == 365243] <- NaN
+test$DAYS_EMPLOYED[test$DAYS_EMPLOYED == 365243] <- NaN
+```
+
+Now let's make the same histogram again and see if the distribution has more reasonable shape.
+```{r message = FALSE, warning = FALSE}
+ggplot(train, aes(x = DAYS_EMPLOYED)) +
+  geom_histogram() +
+  ggtitle("Days Employment Histogram") +
+  xlab("Days Employment")
+```
+
+The distribution looks to be much more in line with what we would expect.
+
+#### Correlations
+```{r}
+# Boolean vector of categorical variables
+facts <- sapply(train, is.factor)
+
+# Subset non-categorical (i.e. numeric or integer) variables
+train.n <- train[,!facts]
+
+# Find correlations with the target variable and sort in an increasing order
+correlations <- cor(train$TARGET, train.n, use="pairwise.complete.obs") %>% 
+  as.data.frame(row.names = 'Correlation') %>% 
+  sort()
+
+# Fifteen most negatively correlated variables
+correlations[,1:15] %>% t()
+
+# Fifteen most positively correlated variables
+correlations[,44:58] %>% t()
+```
+
+DAYS_BIRTH is the age in days of the client at the time of the loan in negative days. he correlation is positive, but the value of this feature is actually negative, meaning that as the client gets older, they are less likely to default. It's a bit confusing, so I will take the absolute value of the feature and then the correlation will be negative.
+
+#### Effect of the age on repayment
+```{r}
+train['DAYS_BIRTH'] <- train['DAYS_BIRTH'] %>% abs()
+test['DAYS_BIRTH'] <- test['DAYS_BIRTH'] %>% abs()
+cor(train['DAYS_BIRTH'], train['TARGET'])
+```
+
+So, as the client gets older they are less likely to default.
+
+First, let's have a look at histogram of this variable.
+
+```{r warning = FALSE, message = FALSE}
+ggplot(train, aes(x = DAYS_BIRTH / -365)) +
+  geom_histogram() +
+  ggtitle("Age of Client") +
+  xlab("Age (years)")
+```
+
+The histogram only confirms that there are no outliers. In order to confirm that older people are less likely to default, we can have a look at a kernel density estimation plot (KDE) colored by the value of the target;
+
+```{r warning = FALSE, message = FALSE}
+ggplot(train, aes(abs(DAYS_BIRTH / -365), colour = as.factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of Ages") +
+  xlab("Age (years)")
+```
+
+It can be seen that target == 1 curve skews towards the younger end of the range or in other words, younger people are more likely to default. This relationship can be shown in another way also; average failure to repay loans by age bracket.
+
+```{r warning = FALSE, message = FALSE}
+# Create YEAR_BIRTH column which is age basically
+train['YEARS_BIRTH'] <- train['DAYS_BIRTH'] / 365
+test['YEARS_BIRTH'] <- test['DAYS_BIRTH'] / 365
+
+# Bin the YEAR_BIRTH column
+train['YEARS_BINNED'] <- cut(train$YEARS_BIRTH, seq(0, 70, by = 5))
+test['YEARS_BINNED'] <- cut(test$YEARS_BIRTH, seq(0, 70, by = 5))
+
+# Group by the bin and calculate averages
+age_groups <- train %>% 
+  group_by(YEARS_BINNED) %>%
+  summarize(Failure_to_Repay = mean(TARGET, na.rm = TRUE))
+age_groups
+
+# Graph the age bins and the average of the target as a bar plot
+ggplot(age_groups, aes(x = YEARS_BINNED, y = Failure_to_Repay)) +
+  geom_bar(stat = 'identity') +
+  ggtitle("Failure to Repay by Age Group") +
+  xlab("Age Group (years)") +
+  ylab("Failure to Repay (%)")
+```
+
+The same trend can be seen in this plot also (i.e. three youngest age groups' failure rate is above 10% while below 5% for oldest age group). 
+
+#### Effect of the EXT_SOURCE variables (three most negative) on repayment
+
+EXT_SOURCE_1, EXT_SOURCE_2, and EXT_SOURCE_3 are most negatively correlated variables with target.
+
+```{r}
+# Correlation of EXT_SOURCE variables with each other and target
+ext_data <- train[c('TARGET', 'EXT_SOURCE_1', 'EXT_SOURCE_2', 'EXT_SOURCE_3', 'DAYS_BIRTH')]
+ext_data_corrs <- cor(ext_data, use = "pairwise.complete.obs")
+ext_data_corrs
+```
+
+Let's have a look at the correlation heatmap;
+
+```{r}
+corrplot(ext_data_corrs, type="upper", order="hclust", 
+         col=brewer.pal(n=8, name="RdBu"))
+```
+
+All EXT_SOURCE variables have negative correlation with target, indicating that as EXT_SOURCES increases, the client is more likely to repay the loan.
+
+Next we can look at the distribution of each of these features colored by the value of the target. This will let us visualize the effect of this variable on the target.
+
+```{r warning = FALSE}
+p1 <- ggplot(train, aes(EXT_SOURCE_1, colour = factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of EXT_SOURCE_1 by Target Value") +
+  xlab("EXT_SOURCE_1") 
+
+p2 <- ggplot(train, aes(EXT_SOURCE_2, colour = factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of EXT_SOURCE_2 by Target Value") +
+  xlab("EXT_SOURCE_2") 
+
+p3 <- ggplot(train, aes(EXT_SOURCE_3, colour = factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of EXT_SOURCE_3 by Target Value") +
+  xlab("EXT_SOURCE_3") 
+
+
+grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+EXT_SOURCE_3 displays the greatest difference between the values of the target. The relationship is not very strong (in fact they are all considered very weak, but these variables will still be useful for a machine learning model to predict whether or not an applicant will repay a loan on time.
+
+# Feature engineering
+#### Interaction terms
+```{r}
+# Make a new dataframe for interaction terms
+inter_features <- c('EXT_SOURCE_1', 'EXT_SOURCE_2', 'EXT_SOURCE_3', 'DAYS_BIRTH')
+
+# Need to impute missing values
+train[inter_features] <- train[inter_features] %>% imputeMissings::impute(method = "median/mode")
+test[inter_features] <- test[inter_features] %>% imputeMissings::impute(method = "median/mode")
+```
+
+```{r echo = FALSE}
+# Check for correlation between combinations of interactions of features with target 
+correlations2 <- 
+data.frame(cor(train$EXT_SOURCE_1*train$EXT_SOURCE_2, train$TARGET), 
+           cor(train$EXT_SOURCE_1*train$EXT_SOURCE_3, train$TARGET),
+           cor(train$EXT_SOURCE_1*train$DAYS_BIRTH, train$TARGET), 
+           cor(train$EXT_SOURCE_2*train$EXT_SOURCE_3, train$TARGET),
+           cor(train$EXT_SOURCE_2*train$DAYS_BIRTH, train$TARGET),
+           cor(train$EXT_SOURCE_3*train$DAYS_BIRTH, train$TARGET),
+           cor(train$EXT_SOURCE_1*train$EXT_SOURCE_2*train$EXT_SOURCE_3, 
+               train$TARGET),
+           cor(train$EXT_SOURCE_1*train$EXT_SOURCE_2*train$DAYS_BIRTH, train$TARGET),
+           cor(train$EXT_SOURCE_2*train$EXT_SOURCE_3*train$DAYS_BIRTH, train$TARGET)) %>% t()
+correlations2 <- correlations2[order(correlations2),] %>% 
+  as.data.frame() 
+names(correlations2) <- "Correlation"
+correlations2
+```
+
+```{r}
+# Not to add too many features, let's just use the ones with +0.18 corr coef.
+train <- train %>% mutate(EXT_SOURCE_2_EXT_SOURCE_3 = EXT_SOURCE_2*EXT_SOURCE_3,
+                          EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3 = EXT_SOURCE_1*EXT_SOURCE_2*EXT_SOURCE_3,
+                          EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3_DAYS_BIRTH = EXT_SOURCE_2*EXT_SOURCE_3*DAYS_BIRTH)
+
+test <- test %>% mutate(EXT_SOURCE_2_EXT_SOURCE_3 = EXT_SOURCE_2*EXT_SOURCE_3,
+                        EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3 = EXT_SOURCE_1*EXT_SOURCE_2*EXT_SOURCE_3,
+                        EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3_DAYS_BIRTH = EXT_SOURCE_2*EXT_SOURCE_3*DAYS_BIRTH)
+
+```
+
+#### Domain knowledge features
+* CREDIT_INCOME_PERCENT # the percentage of the credit amount relative to a client's income
+* ANNUITY_INCOME_PERCENT # the percentage of the loan annuity relative to a client's income
+* CREDIT_TERM # the length of the payment in months (since the annuity is the monthly amount due)
+* DAYS_EMPLOYED_PERCENT # the percentage of the days employed relative to the client's age
+
+```{r}
+# Creation of domain knowledge features
+train['CREDIT_INCOME_PERCENT'] <- train['AMT_CREDIT'] / train['AMT_INCOME_TOTAL']
+train['ANNUITY_INCOME_PERCENT'] <- train['AMT_ANNUITY'] / train['AMT_INCOME_TOTAL']
+train['CREDIT_TERM'] <- train['AMT_ANNUITY'] / train['AMT_CREDIT']
+train['DAYS_EMPLOYED_PERCENT'] <- train['DAYS_EMPLOYED'] / train['DAYS_BIRTH']
+test['CREDIT_INCOME_PERCENT'] <- test['AMT_CREDIT'] / test['AMT_INCOME_TOTAL']
+test['ANNUITY_INCOME_PERCENT'] <- test['AMT_ANNUITY'] / test['AMT_INCOME_TOTAL']
+test['CREDIT_TERM'] <- test['AMT_ANNUITY'] / test['AMT_CREDIT']
+test['DAYS_EMPLOYED_PERCENT'] <- test['DAYS_EMPLOYED'] / test['DAYS_BIRTH']
+```
+
+```{r warnings = FALSE, message = FALSE}
+# Visualization of these new features
+p4 <- ggplot(train, aes(CREDIT_INCOME_PERCENT, colour = factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of CREDIT_INCOME_PERCENT by Target Value") +
+  xlab("CREDIT_INCOME_PERCENT") 
+
+p5 <- ggplot(train, aes(ANNUITY_INCOME_PERCENT, colour = factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of ANNUITY_INCOME_PERCENT by Target Value") +
+  xlab("ANNUITY_INCOME_PERCENT")
+
+p6 <- ggplot(train, aes(CREDIT_TERM, colour = factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of CREDIT_TERM by Target Value") +
+  xlab("CREDIT_TERM")
+
+p7 <- ggplot(train, aes(DAYS_EMPLOYED_PERCENT, colour = factor(TARGET))) +
+  geom_density(size = 1.2) +
+  ggtitle("Distribution of DAYS_EMPLOYED_PERCENT by Target Value") +
+  xlab("DAYS_EMPLOYED_PERCENT")
+
+
+grid.arrange(p4, p5, p6, p7, ncol = 1)
+```
+
+```{r}
+# Median imputation of missing values
+train <- imputeMissings::impute(train, method = 'median/mode')
+test <- imputeMissings::impute(test, method = 'median/mode')
+
+# Scale numeric features
+facts <- sapply(train, is.factor)
+train <- train[,!facts] %>% 
+  dplyr::select(-"TARGET") %>%
+  scale() %>%
+  cbind(train[facts], train['TARGET'])
+  
+test <- test[,!facts] %>% 
+  dplyr::select(-"TARGET") %>%
+  scale() %>%
+  cbind(test[facts], test['TARGET'])
+```
+
+```{r}
+# Second look to correlation after feature engineering, imputing and scaling
+# Find correlations with the target and sort
+facts <- sapply(train, is.factor)
+train.n <- train[,!facts]
+correlations <- cor(train$TARGET, train.n, use="pairwise.complete.obs") %>% 
+  as.data.frame(row.names = 'Correlation') %>% 
+  sort()
+
+# Fifteen most negatively correlated variables
+correlations[,1:15] %>% t()
+
+# Fifteen most positively correlated variables
+correlations[,52:66] %>% t()
+```
+
+```{r}
+# Lastly factorize the target
+train$TARGET <- train$TARGET %>% factor(levels = c(0, 1), labels = c('ND', 'D')) 
+test$TARGET <- test$TARGET %>% factor(levels = c(0, 1), labels = c('ND', 'D')) 
+```
+
+# Modelling
+#### Formula
+```{r}
+formula <- TARGET ~ EXT_SOURCE_2_EXT_SOURCE_3 + EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3 +
+  EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3_DAYS_BIRTH + EXT_SOURCE_2 + EXT_SOURCE_3 +
+  EXT_SOURCE_1 + YEARS_BIRTH + FLOORSMAX_AVG + FLOORSMAX_MEDI +
+  AMT_GOODS_PRICE + FLOORSMAX_MODE + REGION_POPULATION_RELATIVE + ELEVATORS_AVG +
+  YEARS_BEGINEXPLUATATION_AVG + NONLIVINGAPARTMENTS_AVG + NONLIVINGAPARTMENTS_MEDI +
+  YEARS_BEGINEXPLUATATION_MODE + NONLIVINGAPARTMENTS_MODE + AMT_INCOME_TOTAL + CREDIT_TERM +
+  ANNUITY_INCOME_PERCENT + OWN_CAR_AGE + DAYS_REGISTRATION + DAYS_ID_PUBLISH +
+  DAYS_LAST_PHONE_CHANGE + DAYS_EMPLOYED_PERCENT + DAYS_EMPLOYED + facts.names
+```
+
+#### GLM
+```{r}
+glmModel <- glm(formula, data=train, family=binomial)
+pred.glmModel <- predict(glmModel, newdata=test, type="response")
+library(pROC)
+roc.glmModel <- pROC::roc(test$TARGET, pred.glmModel)
+```
