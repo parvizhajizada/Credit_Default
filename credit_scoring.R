@@ -291,20 +291,7 @@ formula <- TARGET ~ EXT_SOURCE_2_EXT_SOURCE_3 + EXT_SOURCE_1_EXT_SOURCE_2_EXT_SO
   AMT_GOODS_PRICE + FLOORSMAX_MODE + REGION_POPULATION_RELATIVE + ELEVATORS_AVG +
   YEARS_BEGINEXPLUATATION_AVG + NONLIVINGAPARTMENTS_AVG + NONLIVINGAPARTMENTS_MEDI +
   YEARS_BEGINEXPLUATATION_MODE + NONLIVINGAPARTMENTS_MODE + AMT_INCOME_TOTAL + CREDIT_TERM +
-  ANNUITY_INCOME_PERCENT + OWN_CAR_AGE + DAYS_REGISTRATION + DAYS_ID_PUBLISH +
-  DAYS_LAST_PHONE_CHANGE + DAYS_EMPLOYED_PERCENT + DAYS_EMPLOYED + NAME_CONTRACT_TYPE +
-  CODE_GENDER + FLAG_OWN_CAR + FLAG_OWN_REALTY + CNT_CHILDREN + NAME_TYPE_SUITE +
-  NAME_INCOME_TYPE + NAME_EDUCATION_TYPE + NAME_FAMILY_STATUS + NAME_HOUSING_TYPE +
-  FLAG_MOBIL + FLAG_EMP_PHONE + FLAG_WORK_PHONE + FLAG_CONT_MOBILE + FLAG_PHONE +
-  FLAG_EMAIL + OCCUPATION_TYPE + CNT_FAM_MEMBERS + REGION_RATING_CLIENT + REGION_RATING_CLIENT_W_CITY +
-  WEEKDAY_APPR_PROCESS_START + HOUR_APPR_PROCESS_START + REG_REGION_NOT_LIVE_REGION +
-  REG_REGION_NOT_WORK_REGION + LIVE_REGION_NOT_WORK_REGION + REG_CITY_NOT_LIVE_CITY +
-  REG_CITY_NOT_WORK_CITY + LIVE_CITY_NOT_WORK_CITY + ORGANIZATION_TYPE + FONDKAPREMONT_MODE +
-  HOUSETYPE_MODE + WALLSMATERIAL_MODE + EMERGENCYSTATE_MODE + OBS_30_CNT_SOCIAL_CIRCLE +
-  DEF_30_CNT_SOCIAL_CIRCLE + OBS_60_CNT_SOCIAL_CIRCLE + DEF_60_CNT_SOCIAL_CIRCLE +
-  FLAG_DOCUMENT_2 + FLAG_DOCUMENT_3 + FLAG_DOCUMENT_4 + AMT_REQ_CREDIT_BUREAU_HOUR +
-  AMT_REQ_CREDIT_BUREAU_DAY + AMT_REQ_CREDIT_BUREAU_WEEK + AMT_REQ_CREDIT_BUREAU_MON +
-  AMT_REQ_CREDIT_BUREAU_QRT + AMT_REQ_CREDIT_BUREAU_YEAR + YEARS_BINNED
+  ANNUITY_INCOME_PERCENT 
 
 # Trying a classic method (GLM)
 glmModel <- glm(formula, data=train, family=binomial)
@@ -424,12 +411,11 @@ auc.rfModel <- pROC::auc(roc.rfModel)
 
 
 # Choose the best model
-test.auc <- data.frame(model=c("glm","glmboost","gbm","glmnet","earth","cart","ctree"),
-                       auc=c(auc.glmModel, auc.glmBoostModel, auc.gbmModel, auc.eNetModel, auc.earthModel, auc.cartModel, auc.partyModel))
+test.auc <- data.frame(model=c("glm","glmboost","gbm","glmnet","earth","cart","ctree", "rForest"),
+                       auc=c(auc.glmModel, auc.glmBoostModel, auc.gbmModel, auc.eNetModel, auc.earthModel, auc.cartModel, auc.partyModel, auc.rfModel))
 test.auc <- test.auc[order(test.auc$auc, decreasing=TRUE),]
 test.auc$model <- factor(test.auc$model, levels=test.auc$model)
 test.auc
-
 
 # Plot AUC
 library(ggplot2)

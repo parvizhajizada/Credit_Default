@@ -2,7 +2,9 @@
 title: "Credit Risk - methods of scorecards development in R"
 author: "Parviz Hajizada"
 date: "11 may 2019"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 # Introduction
@@ -37,7 +39,7 @@ library(tidyverse)
 library(gmodels)
 library(vcd)
 library(RColorBrewer)
-
+library(pROC)
 ```
 
 #### Import data
@@ -58,6 +60,12 @@ train <- app[which_train,]
 test <- app[-which_train,]
 ```
 
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# Delete app file once train and test set is created
+app <- NULL
+which_train <- NULL
+```
+
 
 
 # Exploratory data analysis
@@ -68,7 +76,7 @@ The target is what we are asked to predict: either a 0 for the loan was repaid o
 tabyl(train$TARGET) 
 tabyl(test$TARGET) 
 
-ggplot(app, aes(x = TARGET)) +
+ggplot(train, aes(x = TARGET)) +
   geom_histogram()
 ```
 
@@ -126,7 +134,7 @@ ggplot(train, aes(x = DAYS_EMPLOYED)) +
   xlab("Days Employment")
 ```
 
-It looks like that 365243 is the only explicit anomaly. For now, let's just replace this value with NaN. Later on, during the modelling I will impute NA and NaN with median.
+It looks like that 365243 is the only explicit anomaly. For now, let's just replace this value with NaN. Later on, during the modelling I will impute both NAs and NaNs with median.
 
 ```{r} 
 train$DAYS_EMPLOYED[train$DAYS_EMPLOYED == 365243] <- NaN
@@ -144,7 +152,7 @@ ggplot(train, aes(x = DAYS_EMPLOYED)) +
 The distribution looks to be much more in line with what we would expect.
 
 #### Correlations
-```{r}
+```{r warning = FALSE}
 # Boolean vector of categorical variables
 facts <- sapply(train, is.factor)
 
@@ -163,7 +171,12 @@ correlations[,1:15] %>% t()
 correlations[,44:58] %>% t()
 ```
 
-DAYS_BIRTH is the age in days of the client at the time of the loan in negative days. he correlation is positive, but the value of this feature is actually negative, meaning that as the client gets older, they are less likely to default. It's a bit confusing, so I will take the absolute value of the feature and then the correlation will be negative.
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# Delete train.n once we calculate correlations
+train.n <- NULL
+```
+
+DAYS_BIRTH is the age in days of the client at the time of the loan in negative days. Correlation is positive, but the value of this feature is actually negative, meaning that as the client gets older, they are less likely to default. It's a bit confusing, so I will take the absolute value of the feature and then the correlation will be negative.
 
 #### Effect of the age on repayment
 ```{r}
@@ -257,8 +270,14 @@ p3 <- ggplot(train, aes(EXT_SOURCE_3, colour = factor(TARGET))) +
   ggtitle("Distribution of EXT_SOURCE_3 by Target Value") +
   xlab("EXT_SOURCE_3") 
 
-
 grid.arrange(p1, p2, p3, ncol = 1)
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# set p1, p2, p3 to NULL. memory intensive plots
+p1 <- NULL
+p2 <- NULL
+p3 <- NULL
 ```
 
 EXT_SOURCE_3 displays the greatest difference between the values of the target. The relationship is not very strong (in fact they are all considered very weak, but these variables will still be useful for a machine learning model to predict whether or not an applicant will repay a loan on time.
@@ -323,7 +342,7 @@ test['CREDIT_TERM'] <- test['AMT_ANNUITY'] / test['AMT_CREDIT']
 test['DAYS_EMPLOYED_PERCENT'] <- test['DAYS_EMPLOYED'] / test['DAYS_BIRTH']
 ```
 
-```{r warnings = FALSE, message = FALSE}
+```{r warning = FALSE, message = FALSE}
 # Visualization of these new features
 p4 <- ggplot(train, aes(CREDIT_INCOME_PERCENT, colour = factor(TARGET))) +
   geom_density(size = 1.2) +
@@ -345,8 +364,15 @@ p7 <- ggplot(train, aes(DAYS_EMPLOYED_PERCENT, colour = factor(TARGET))) +
   ggtitle("Distribution of DAYS_EMPLOYED_PERCENT by Target Value") +
   xlab("DAYS_EMPLOYED_PERCENT")
 
-
 grid.arrange(p4, p5, p6, p7, ncol = 1)
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# set p4, p5, p6, p7 to NULL. memory intensive plots
+p4 <- NULL
+p5 <- NULL
+p6 <- NULL
+p7 <- NULL
 ```
 
 ```{r}
@@ -383,29 +409,205 @@ correlations[,1:15] %>% t()
 correlations[,52:66] %>% t()
 ```
 
-```{r}
-# Lastly factorize the target
-train$TARGET <- train$TARGET %>% factor(levels = c(0, 1), labels = c('ND', 'D')) 
-test$TARGET <- test$TARGET %>% factor(levels = c(0, 1), labels = c('ND', 'D')) 
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+# Set train.n to NULL. it is memory intensive
+train.n <- NULL
 ```
+
+
+```{r}
+# Factorize the target
+train$TARGET <- train$TARGET %>% 
+  factor(levels = c(0, 1), labels = c('ND', 'D')) 
+test$TARGET <- test$TARGET %>% 
+  factor(levels = c(0, 1), labels = c('ND', 'D'))
+
+train$FLAG_DOCUMENT_2 <- train$FLAG_DOCUMENT_2 %>%
+  factor(levels = c(0, 1), labels = c('Y', 'N')) 
+test$FLAG_DOCUMENT_2 <- test$FLAG_DOCUMENT_2 %>%
+  factor(levels = c(0, 1), labels = c('Y', 'N'))
+
+train$FLAG_DOCUMENT_3 <- train$FLAG_DOCUMENT_3 %>%
+  factor(levels = c(0, 1), labels = c('Y', 'N')) 
+test$FLAG_DOCUMENT_3 <- test$FLAG_DOCUMENT_3 %>%
+  factor(levels = c(0, 1), labels = c('Y', 'N'))
+
+
+```
+
+#### Feature selection of categorical variables
+Based on the ROC metric, following categorical variables found to be significant;
+* FLAG_DOCUMENT_2 
+* FLAG_DOCUMENT_3 
+* NAME_INCOME_TYPE
+* NAME_EDUCATION_TYPE  
+* NAME_FAMILY_STATUS 
+* OCCUPATION_TYPE
+* REGION_RATING_CLIENT  
+* WEEKDAY_APPR_PROCESS_START 
+* REG_CITY_NOT_LIVE_CITY
+* FONDKAPREMONT_MODE 
+* WALLSMATERIAL_MODE
+
 
 # Modelling
 #### Formula
+In the formula, categorical variables are omitted because when they are present it is not possible to allocate enough memory for running intended model with all the variables. But as a side note two models namely GLM and CART have been tested with categorical variables and found to have a bit better ROC score than models without. 
 ```{r}
-formula <- TARGET ~ EXT_SOURCE_2_EXT_SOURCE_3 + EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3 +
-  EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3_DAYS_BIRTH + EXT_SOURCE_2 + EXT_SOURCE_3 +
-  EXT_SOURCE_1 + YEARS_BIRTH + FLOORSMAX_AVG + FLOORSMAX_MEDI +
-  AMT_GOODS_PRICE + FLOORSMAX_MODE + REGION_POPULATION_RELATIVE + ELEVATORS_AVG +
-  YEARS_BEGINEXPLUATATION_AVG + NONLIVINGAPARTMENTS_AVG + NONLIVINGAPARTMENTS_MEDI +
-  YEARS_BEGINEXPLUATATION_MODE + NONLIVINGAPARTMENTS_MODE + AMT_INCOME_TOTAL + CREDIT_TERM +
-  ANNUITY_INCOME_PERCENT + OWN_CAR_AGE + DAYS_REGISTRATION + DAYS_ID_PUBLISH +
-  DAYS_LAST_PHONE_CHANGE + DAYS_EMPLOYED_PERCENT + DAYS_EMPLOYED + facts.names
+formula <- TARGET ~ EXT_SOURCE_2_EXT_SOURCE_3 +
+                    EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3 +        
+                    EXT_SOURCE_1_EXT_SOURCE_2_EXT_SOURCE_3_DAYS_BIRTH +  
+                    EXT_SOURCE_2 + EXT_SOURCE_3 +
+                    EXT_SOURCE_1 + YEARS_BIRTH + FLOORSMAX_AVG + 
+                    FLOORSMAX_MEDI + AMT_GOODS_PRICE + FLOORSMAX_MODE + 
+                    REGION_POPULATION_RELATIVE + ELEVATORS_AVG +   
+                    YEARS_BEGINEXPLUATATION_AVG + NONLIVINGAPARTMENTS_AVG +   
+                    NONLIVINGAPARTMENTS_MEDI + YEARS_BEGINEXPLUATATION_MODE +  
+                    NONLIVINGAPARTMENTS_MODE + AMT_INCOME_TOTAL +    
+                    CREDIT_TERM + ANNUITY_INCOME_PERCENT + OWN_CAR_AGE + 
+                    DAYS_REGISTRATION + DAYS_ID_PUBLISH + DAYS_LAST_PHONE_CHANGE+
+                    DAYS_EMPLOYED_PERCENT + DAYS_EMPLOYED
 ```
 
 #### GLM
-```{r}
+```{r warning = FALSE, message = FALSE}
 glmModel <- glm(formula, data=train, family=binomial)
 pred.glmModel <- predict(glmModel, newdata=test, type="response")
-library(pROC)
 roc.glmModel <- pROC::roc(test$TARGET, pred.glmModel)
+auc.glmModel <- pROC::auc(roc.glmModel)
+auc.glmModel
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+glmModel <- NULL
+roc.glmModel <- NULL
+pred.glmModel <- NULL
+```
+
+#### GLMBOOST
+```{r warning = FALSE, message = FALSE}
+fitControl <- trainControl(method = "cv",
+                           number = 3,
+                           classProbs = TRUE,
+                           summaryFunction = twoClassSummary)
+
+set.seed(1)
+glmBoostModel <- train(formula, 
+                       data=train, 
+                       method = "glmboost", 
+                       metric="ROC", 
+                       trControl = fitControl, 
+                       center=TRUE)
+
+pred.glmBoostModel <- as.vector(predict(glmBoostModel, newdata=test, type="prob")[,"D"])
+roc.glmBoostModel <- pROC::roc(test$TARGET, pred.glmBoostModel)
+auc.glmBoostModel <- pROC::auc(roc.glmBoostModel)
+auc.glmBoostModel
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+glmBoostModel <- NULL
+roc.glmBoostModel <- NULL
+pred.glmBoostModel <- NULL
+```
+
+#### Conditional Inference Tree
+```{r warning = FALSE, message = FALSE}
+set.seed(1)
+partyModel <- train(formula, 
+                    data=train, 
+                    method = "ctree", 
+                    metric="ROC", 
+                    trControl = fitControl)
+
+pred.partyModel <- as.vector(predict(partyModel, newdata=test, type="prob")[,"D"])
+roc.partyModel <- pROC::roc(test$TARGET, pred.partyModel)
+auc.partyModel <- pROC::auc(roc.partyModel)
+auc.partyModel
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+partyModel <- NULL
+roc.partyModel <- NULL
+pred.partyModel <- NULL
+```
+
+#### Elastic Net
+```{r warning = FALSE, message = FALSE}
+set.seed(1)
+eNetModel <- train(formula, 
+                   data=train, 
+                   method = "glmnet", 
+                   metric="ROC", 
+                   trControl = fitControl, 
+                   family="binomial")
+
+pred.eNetModel <- as.vector(predict(eNetModel, newdata=test, type="prob")[,"D"])
+roc.eNetModel <- pROC::roc(test$TARGET, pred.eNetModel)
+auc.eNetModel <- pROC::auc(roc.eNetModel)
+auc.eNetModel
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+eNetModel <- NULL
+roc.eNetModel <- NULL
+pred.eNetModel <- NULL
+```
+
+#### Earth
+```{r warning = FALSE, message = FALSE}
+set.seed(1)
+earthModel <- train(formula,
+                    data=train,
+                    method = "earth",
+                    glm=list(family=binomial),
+                    metric="ROC",
+                    trControl = fitControl)
+
+pred.earthModel <- as.vector(predict(earthModel, newdata=test, type="prob")[,"D"])
+roc.earthModel <- pROC::roc(test$TARGET, pred.earthModel)
+auc.earthModel <- pROC::auc(roc.earthModel)
+auc.earthModel
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+earthModel <- NULL
+roc.earthModel <- NULL
+pred.earthModel <- NULL
+```
+
+#### Boosted Trees
+```{r warning = FALSE, message = FALSE}
+set.seed(1)
+gbmModel <- train(formula,
+                  data=train,
+                  method = "gbm",
+                  metric="ROC", 
+                  trControl = fitControl,
+                  verbose=FALSE)
+
+pred.gbmModel <- as.vector(predict(gbmModel, newdata=test, type="prob")[,"D"])
+roc.gbmModel <- pROC::roc(test$TARGET, pred.gbmModel)
+auc.gbmModel <- pROC::auc(roc.gbmModel)
+auc.gbmModel
+```
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+gbmModel <- NULL
+roc.gbmModel <- NULL
+pred.gbmModel <- NULL
+```
+
+# Choose the best model
+```{r warning = FALSE, message = FALSE}
+test.auc <- data.frame(model=c("glm","glmboost","glmnet","earth","ctree","gbm"),
+                       auc=c(auc.glmModel, auc.glmBoostModel, auc.eNetModel, auc.earthModel, auc.partyModel, auc.gbmModel))
+test.auc <- test.auc[order(test.auc$auc, decreasing=TRUE),]
+test.auc$model <- factor(test.auc$model, levels=test.auc$model)
+test.auc
+
+# Plot AUC
+theme_set(theme_gray(base_size = 18))
+ggplot(data = test.auc, aes(x = model, y = auc)) +
+  geom_bar(stat="identity")
 ```
